@@ -26,9 +26,13 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "LEPTOS_OUTPUT_NAME=leptos-blog ./target/debug/leptos-blog"
+args = "cargo run --no-default-features --features ssr --bin leptos-blog"
 waitForPort = 5000
 
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 43243
+externalPort = 3000
