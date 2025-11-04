@@ -1,0 +1,24 @@
+# Rust
+/target
+/dist
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# Leptos
+/pkg
+/.leptos
+/target/site
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.log

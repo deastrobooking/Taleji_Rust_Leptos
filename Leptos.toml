@@ -1,0 +1,23 @@
+[package]
+name = "leptos-blog"
+version = "0.1.0"
+edition = "2021"
+
+[leptos]
+output-name = "leptos-blog"
+site-root = "target/site"
+site-pkg-dir = "pkg"
+style-file = "style/main.css"
+assets-dir = "public"
+site-addr = "0.0.0.0:5000"
+reload-port = 3001
+end2end-cmd = "cargo test --features=hydrate"
+end2end-dir = "e2e"
+browserquery = "defaults"
+watch = false
+env = "DEV"
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false
+lib-profile-release = "wasm-release"
