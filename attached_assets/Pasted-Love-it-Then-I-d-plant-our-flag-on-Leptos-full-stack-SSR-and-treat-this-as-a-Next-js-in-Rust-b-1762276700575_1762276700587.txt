@@ -1,0 +1,364 @@
+Love it. Then I’d plant our flag on **Leptos full-stack SSR** and treat this as a “Next.js-in-Rust blog kit”.
+
+Below is a **concrete architecture + code skeleton** you can start from and evolve.
+
+---
+
+## 1. Stack choice
+
+* **Framework:** Leptos (full-stack, SSR + hydration, “isomorphic” Rust). ([book.leptos.dev][1])
+* **Server:** Axum + `leptos_axum`.
+* **DB:** `sqlx` with Postgres (or SQLite by flipping features).
+* **Content:** Markdown in DB (or filesystem later), rendered via `pulldown-cmark`.
+* **Delivery:** SSR for all pages → great SEO; hydrate on client for search/filter/admin.
+
+---
+
+## 2. Repo layout
+
+```text
+leptos-blog/
+  Cargo.toml
+  Leptos.toml              # cargo-leptos config (ports, paths, env)
+  migrations/              # sqlx migrations
+    20251104120000_create_posts.sql
+  .env                     # DATABASE_URL, LEPTOS_* config
+
+  src/
+    main.rs                # Axum + Leptos server entry
+    app.rs                 # Root <App/> component + routes
+    models.rs              # Post, Tag, etc.
+    db.rs                  # sqlx pool, queries
+    markdown.rs            # md -> HTML
+    pages/
+      home.rs              # / (post list)
+      post.rs              # /post/:slug
+      admin/
+        mod.rs             # /admin
+        editor.rs          # /admin/post/:id?
+```
+
+Run & build via `cargo-leptos` (it wires server + WASM client build). ([book.leptos.dev][1])
+
+---
+
+## 3. Core data model
+
+`src/models.rs`:
+
+```rust
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Post {
+    pub id: i64,
+    pub slug: String,
+    pub title: String,
+    pub summary: String,
+    pub body_markdown: String,
+    pub body_html: String,
+    pub published_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+```
+
+Migration example `migrations/20251104120000_create_posts.sql` (Postgres):
+
+```sql
+CREATE TABLE posts (
+    id              BIGSERIAL PRIMARY KEY,
+    slug            TEXT UNIQUE NOT NULL,
+    title           TEXT NOT NULL,
+    summary         TEXT NOT NULL,
+    body_markdown   TEXT NOT NULL,
+    body_html       TEXT NOT NULL,
+    published_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_posts_published_at ON posts (published_at DESC);
+```
+
+---
+
+## 4. DB + markdown helpers
+
+`src/db.rs`:
+
+```rust
+use sqlx::{Pool, Postgres};
+use std::sync::Arc;
+
+pub type Db = Arc<Pool<Postgres>>;
+
+pub async fn create_pool(database_url: &str) -> anyhow::Result<Db> {
+    let pool = Pool::<Postgres>::connect(database_url).await?;
+    sqlx::migrate!().run(&pool).await?;
+    Ok(Arc::new(pool))
+}
+```
+
+`src/markdown.rs`:
+
+```rust
+use pulldown_cmark::{Options, Parser, html};
+
+pub fn markdown_to_html(md: &str) -> String {
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_TABLES);
+    opts.insert(Options::ENABLE_FOOTNOTES);
+    let parser = Parser::new_ext(md, opts);
+    let mut out = String::new();
+    html::push_html(&mut out, parser);
+    out
+}
+```
+
+---
+
+## 5. Leptos app + routes
+
+`src/app.rs`:
+
+```rust
+use leptos::*;
+use leptos_meta::*;
+use leptos_router::*;
+
+use crate::pages::{home::HomePage, post::PostPage, admin::AdminRouter};
+
+#[component]
+pub fn App() -> impl IntoView {
+    provide_meta_context();
+
+    view! {
+        <Html lang="en" />
+        <Head>
+            <Title text="Rust/Leptos Blog" />
+            <Meta name="viewport" content="width=device-width, initial-scale=1" />
+        </Head>
+        <Body>
+            <Router>
+                <main class="container">
+                    <Routes>
+                        <Route path="/" view=HomePage />
+                        <Route path="/post/:slug" view=PostPage />
+                        <Route path="/admin/*any" view=AdminRouter />
+                    </Routes>
+                </main>
+            </Router>
+        </Body>
+    }
+}
+```
+
+---
+
+## 6. Server entry (Axum + Leptos)
+
+`src/main.rs`:
+
+```rust
+use std::net::SocketAddr;
+
+use axum::{routing::get, Router};
+use dotenvy::dotenv;
+use leptos::*;
+use leptos_axum::*;
+use sqlx::postgres::PgPoolOptions;
+
+mod app;
+mod db;
+mod models;
+mod markdown;
+mod pages;
+
+use crate::app::App;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dotenv().ok();
+
+    // Leptos config (from Leptos.toml / env)
+    let conf = get_configuration(None).await?;
+    let addr = conf.leptos_options.site_addr;
+
+    // DB pool
+    let db_url = std::env::var("DATABASE_URL")?;
+    let pool = PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&db_url)
+        .await?;
+    let db = std::sync::Arc::new(pool);
+
+    let leptos_options = conf.leptos_options;
+    let routes = generate_route_list(App);
+
+    let app = Router::new()
+        // Leptos SSR routes
+        .leptos_routes(&leptos_options, routes, move || {
+            let db = db.clone();
+            async move {
+                Ok(App).with_context(move || provide_context(db.clone()))
+            }
+        })?
+        // Static files (WASM, JS, CSS)
+        .fallback(file_and_error_handler)
+        .with_state(leptos_options);
+
+    println!("Listening on http://{}", addr);
+    axum::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .await?;
+
+    Ok(())
+}
+```
+
+This is standard `leptos_axum` SSR wiring. ([book.leptos.dev][1])
+
+---
+
+## 7. Server functions for blog data
+
+Leptos **server functions** give you a clean full-stack boundary. ([book.leptos.dev][1])
+
+`src/pages/home.rs`:
+
+```rust
+use leptos::*;
+use crate::{models::Post};
+use crate::db::Db;
+
+#[server(GetPublishedPosts, "/api")]
+pub async fn get_published_posts() -> Result<Vec<Post>, ServerFnError> {
+    use leptos::server_fn::error::ServerFnError;
+    use sqlx::Row;
+
+    let db = expect_context::<Db>();
+
+    let posts = sqlx::query_as::<_, Post>(
+        r#"
+        SELECT * FROM posts
+        WHERE published_at IS NOT NULL
+        ORDER BY published_at DESC
+        "#
+    )
+    .fetch_all(&*db)
+    .await
+    .map_err(ServerFnError::from)?;
+
+    Ok(posts)
+}
+
+#[component]
+pub fn HomePage() -> impl IntoView {
+    let posts = create_resource(|| (), |_| async { get_published_posts().await });
+
+    view! {
+        <section>
+            <h1>"Blog"</h1>
+            <Suspense fallback=move || view! { <p>"Loading..."</p> }>
+                {move || posts.get().map(|res| match res {
+                    Ok(posts) => view! {
+                        <ul>
+                            {posts.into_iter().map(|p| {
+                                view! {
+                                    <li>
+                                        <a href=format!("/post/{}", p.slug)>{p.title}</a>
+                                        <p>{p.summary}</p>
+                                    </li>
+                                }
+                            }).collect_view()}
+                        </ul>
+                    },
+                    Err(e) => view! { <p class="error">{format!("Error: {e}")}</p> }
+                })}
+            </Suspense>
+        </section>
+    }
+}
+```
+
+`src/pages/post.rs`:
+
+```rust
+use leptos::*;
+use leptos_router::use_params_map;
+use crate::{models::Post};
+use crate::db::Db;
+
+#[server(GetPostBySlug, "/api")]
+pub async fn get_post_by_slug(slug: String) -> Result<Post, ServerFnError> {
+    use leptos::server_fn::error::ServerFnError;
+
+    let db = expect_context::<Db>();
+
+    let post = sqlx::query_as::<_, Post>(
+        r#"
+        SELECT * FROM posts
+        WHERE slug = $1 AND published_at IS NOT NULL
+        "#
+    )
+    .bind(&slug)
+    .fetch_one(&*db)
+    .await
+    .map_err(ServerFnError::from)?;
+
+    Ok(post)
+}
+
+#[component]
+pub fn PostPage() -> impl IntoView {
+    let params = use_params_map();
+    let slug = move || params.with(|m| m.get("slug").cloned().unwrap_or_default());
+
+    let post_res = create_resource(slug, |slug| async move {
+        get_post_by_slug(slug).await
+    });
+
+    view! {
+        <article>
+            <Suspense fallback=move || view! { <p>"Loading post..."</p> }>
+                {move || post_res.get().map(|res| match res {
+                    Ok(post) => view! {
+                        <h1>{post.title}</h1>
+                        <p class="summary">{post.summary}</p>
+                        <div class="post-body" inner_html=post.body_html></div>
+                    },
+                    Err(e) => view! { <p class="error">{format!("Error: {e}")}</p> }
+                })}
+            </Suspense>
+        </article>
+    }
+}
+```
+
+---
+
+## 8. Next depth steps
+
+Once this skeleton is compiling, “deepest fastest” next steps are:
+
+1. **Admin UI** (`/admin`) using more server functions for create/update posts.
+2. **Search**:
+
+   * Start simple: `WHERE title ILIKE $1 OR body_markdown ILIKE $1`.
+   * Later: offline tokenizer + search index table.
+3. **SEO**:
+
+   * Per-post `<Title>`, `<Meta>` from `Post` in `PostPage`.
+4. **Filesystem content mode**:
+
+   * Background job: scan `content/*.md`, upsert into DB using `markdown_to_html`.
+
+If you want, I can next:
+
+* Add an `/admin` editor component using Leptos form actions, and
+* Show how to wire file-based Markdown import into a CLI or background task in this same crate.
+
+[1]: https://book.leptos.dev/getting_started/index.html?utm_source=chatgpt.com "Getting Started"
