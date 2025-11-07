@@ -3,6 +3,8 @@ use crate::models::Post;
 
 #[cfg(feature = "ssr")]
 use crate::db::Db;
+#[cfg(feature = "ssr")]
+use crate::error::{AppError, log_error};
 
 #[server(GetPublishedPosts, "/api")]
 pub async fn get_published_posts() -> Result<Vec<Post>, ServerFnError> {
@@ -13,12 +15,18 @@ pub async fn get_published_posts() -> Result<Vec<Post>, ServerFnError> {
         SELECT * FROM posts
         WHERE published_at IS NOT NULL
         ORDER BY published_at DESC
+        LIMIT 50
         "#
     )
     .fetch_all(&*db)
     .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    .map_err(|e| {
+        let app_error = AppError::Database(e);
+        log_error(&app_error, "Failed to fetch published posts");
+        ServerFnError::from(app_error)
+    })?;
 
+    tracing::info!("Retrieved {} published posts", posts.len());
     Ok(posts)
 }
 

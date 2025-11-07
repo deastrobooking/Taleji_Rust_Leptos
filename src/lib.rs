@@ -2,9 +2,16 @@ pub mod app;
 pub mod models;
 pub mod markdown;
 pub mod pages;
+pub mod error;
 
 #[cfg(feature = "ssr")]
 pub mod db;
+#[cfg(feature = "ssr")]
+pub mod security;
+#[cfg(feature = "ssr")]
+pub mod config;
+#[cfg(feature = "ssr")]
+pub mod auth;
 
 #[cfg(feature = "hydrate")]
 #[wasm_bindgen::prelude::wasm_bindgen]

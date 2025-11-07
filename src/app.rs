@@ -2,7 +2,12 @@ use leptos::*;
 use leptos_meta::*;
 use leptos_router::*;
 
-use crate::pages::{home::HomePage, post::PostPage};
+use crate::pages::{
+    home::HomePage, 
+    post::PostPage, 
+    auth::{LoginPage, RegisterPage},
+    search::SearchPage
+};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -18,13 +23,23 @@ pub fn App() -> impl IntoView {
         <Router>
             <nav class="nav">
                 <div class="container">
-                    <a href="/" class="logo">"Rust Blog"</a>
+                    <div class="nav-content">
+                        <a href="/" class="logo">"Taleji"</a>
+                        <div class="nav-links">
+                            <a href="/search" class="nav-link">"Search"</a>
+                            <a href="/login" class="nav-link">"Login"</a>
+                            <a href="/register" class="nav-link btn btn-primary">"Sign Up"</a>
+                        </div>
+                    </div>
                 </div>
             </nav>
             <main class="container">
                 <Routes>
                     <Route path="/" view=HomePage />
                     <Route path="/post/:slug" view=PostPage />
+                    <Route path="/search" view=SearchPage />
+                    <Route path="/login" view=LoginPage />
+                    <Route path="/register" view=RegisterPage />
                 </Routes>
             </main>
             <footer class="footer">

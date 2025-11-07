@@ -5,10 +5,21 @@ use crate::models::Post;
 
 #[cfg(feature = "ssr")]
 use crate::db::Db;
+#[cfg(feature = "ssr")]
+use crate::error::{AppError, log_error};
 
 #[server(GetPostBySlug, "/api")]
 pub async fn get_post_by_slug(slug: String) -> Result<Post, ServerFnError> {
+    use sqlx::Row;
+    
     let db = expect_context::<Db>();
+
+    // Validate slug format
+    if slug.is_empty() || slug.len() > 100 {
+        let error = AppError::Validation("Invalid slug format".to_string());
+        log_error(&error, &format!("Invalid slug: {}", slug));
+        return Err(ServerFnError::from(error));
+    }
 
     let post = sqlx::query_as::<_, Post>(
         r#"
@@ -19,8 +30,16 @@ pub async fn get_post_by_slug(slug: String) -> Result<Post, ServerFnError> {
     .bind(&slug)
     .fetch_one(&*db)
     .await
-    .map_err(|e| ServerFnError::new(e.to_string()))?;
+    .map_err(|e| {
+        let app_error = match e {
+            sqlx::Error::RowNotFound => AppError::NotFound(format!("Post with slug '{}' not found", slug)),
+            _ => AppError::Database(e),
+        };
+        log_error(&app_error, &format!("Failed to fetch post with slug: {}", slug));
+        ServerFnError::from(app_error)
+    })?;
 
+    tracing::info!("Retrieved post: {} (slug: {})", post.title, post.slug);
     Ok(post)
 }
 
